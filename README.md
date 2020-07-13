@@ -5,7 +5,16 @@ We are glad you found your way to our repository for our partial replication of 
 As a part of our course 'Experimental Psychology Lab', offered by Dr. Michael	Franke at the University of Osnabrueck, we performed this experiment. 
 The experiment was executed in July 2020.
 Our group consists of Luisa Drescher, Hannah Gauditz, Lilian Menzner und Lilith Okonnek.
-Have a look in the wiki for an overwiew of the materials we provide here.
+
+## Overwiew of accessable materials
+
+Here you will find an short introduction for your orientation in our repository. 
+In the folder analysis we provide you with the script for our statistical analysis. 
+In the folder materials we provide you with the script for our experiment, the used stimuli and the images and graphs used in our final report. 
+In the folder data we provide the raw data we accumulated through our pilot study and our final study. 
+In the folder manuscript we provide our final report, our preregistration report and our experimental design.
+
+We hope you find everything to your convenience.
 
 ## Original paper
 Our study is based upon parts of the study 'Graded motor responses in the time	course of categorizing atypical exemplars'by Dale et. al. and was published in 2007 in 'Memory & Cognition'. 
