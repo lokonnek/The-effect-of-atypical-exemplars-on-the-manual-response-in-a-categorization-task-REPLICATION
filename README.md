@@ -9,7 +9,6 @@ Our group consists of Luisa Drescher, Hannah Gauditz, Lilian Menzner und Lilith 
 ## Overwiew of accessable materials
 
 Here you will find an short introduction for your orientation in our repository.
-
 In the folder analysis we provide you with the script for our statistical analysis.
 
 In the folder materials we provide you with the script for our experiment, the used stimuli and the images and graphs used in our final report.
