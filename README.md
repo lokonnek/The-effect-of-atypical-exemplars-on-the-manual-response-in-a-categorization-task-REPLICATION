@@ -1,3 +1,10 @@
-# Testtrial
+# The effect of atypical exemplars on the manual response in a categorization task: A replication study
 
-## First test of creating collaboratory repository for our project
+## Introduction
+
+
+## Original paper
+
+## Contacts
+
+## Links
