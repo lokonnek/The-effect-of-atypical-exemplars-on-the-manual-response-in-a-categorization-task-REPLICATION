@@ -8,19 +8,15 @@ Our group consists of Luisa Drescher, Hannah Gauditz, Lilian Menzner und Lilith 
 
 ## Overwiew of accessable materials
 
-Here you will find an short introduction for your orientation in our repository.
-In the folder analysis we provide you with the script for our statistical analysis.
-
-In the folder materials we provide you with the script for our experiment, the used stimuli and the images and graphs used in our final report.
-
-In the folder data we provide the raw data we accumulated through our pilot study and our final study. 
-
-In the folder manuscript we provide our final report, our preregistration report and our experimental design.
-
+Here you will find an short introduction for your orientation in our repository. <br>
+In the folder analysis we provide you with the script for our statistical analysis.<br>
+In the folder materials we provide you with the script for our experiment, the used stimuli and the images and graphs used in our final report.<br>
+In the folder data we provide the raw data we accumulated through our pilot study and our final study. <br>
+In the folder manuscript we provide our final report, our preregistration report and our experimental design.<br>
 We hope you find everything to your convenience.
 
 ## Original paper
-Our study is based upon parts of the study 'Graded motor responses in the time	course of categorizing atypical exemplars'by Dale et. al. and was published in 2007 in 'Memory & Cognition'. 
+Our study is based upon parts of the study 'Graded motor responses in the time	course of categorizing atypical exemplars'by Dale et. al. and was published in 2007 in 'Memory & Cognition'. <br>
 Have a look at the full original paper:
 [pdf](https://link.springer.com/content/pdf/10.3758/BF03195938.pdf)
 
@@ -34,8 +30,7 @@ Online Link: LINK EINFÜGEN
 Offline: ERKLÄRUNG EINFÜGEN
 
 ## Contact us
-Please do not hesitate to contact us if there are any remaining questions.
-
+Please do not hesitate to contact us if there are any remaining questions.<br>
 ldrescher@uos.de
 hgauditz@uos.de
 lmenzner@uos.de
