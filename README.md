@@ -2,7 +2,7 @@
 
 ## Welcome
 We are glad you found your way to our repository for our partial replication of the original study 'Graded motor responses in the time	course of categorizing atypical exemplars'.
-As a part of our course 'Experimental Psychology Lab', offered by Dr. Michael	Franke at the University of Osnabrueck, we performed this experiment. 
+As a part of our course 'Experimental Psychology Lab', offered by Prof. Dr. Michael	Franke at the University of Osnabrueck, we performed this experiment. 
 The experiment was executed in July 2020.
 Our group consists of Luisa Drescher, Hannah Gauditz, Lilian Menzner und Lilith Okonnek.
 
