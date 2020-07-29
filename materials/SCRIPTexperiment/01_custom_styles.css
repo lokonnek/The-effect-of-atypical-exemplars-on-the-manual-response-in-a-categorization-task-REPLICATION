@@ -1,0 +1,49 @@
+/* In this file you can overwrite/extend the given magpie-styles or declare your own ones */
+
+/* Example of extending a given magpie-style */
+
+/*.magpie-view-stimulus-container {
+    height: auto;
+    max-height: 350px;
+} */
+
+/* Display all titles in red */
+/*.magpie-view-title {
+    color: red;
+}*/
+
+/* Example of declaring your own style */
+.custom-border {
+   border: 1px solid powderblue;
+}
+
+.category-answer {
+    font-size: 2em;
+}
+
+#left-category {
+    float: left;
+    margin-left: 50px;
+}
+
+#right-category {
+    float: right;
+    margin-right: 50px;
+}
+
+.magpie-view-button:hover {
+    cursor: pointer;
+}
+
+.animal-name {
+    margin: auto;
+    width: 100px;
+    border: 3px solid blue;
+    padding: 10px;
+    text-align: center;
+    margin-top: 300px;
+}
+
+#click-me {
+    margin-top: 300px;
+}
