@@ -27,7 +27,7 @@ In this mousetracking study the participants had to select the correct category 
 
 Online Link: LINK EINFÜGEN
 
-Offline: ERKLÄRUNG EINFÜGEN
+Offline: Clone the folder SCRIPTexperiment in materials, run npm install and open index.html.
 
 ## Contact us
 Please do not hesitate to contact us if there are any remaining questions.<br>
