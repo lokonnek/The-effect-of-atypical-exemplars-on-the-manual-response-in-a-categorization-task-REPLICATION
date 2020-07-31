@@ -30,7 +30,7 @@ Online Link: [Link to experiment](https://xplab-mt-experiment.netlify.app/)
 Offline: Clone the folder SCRIPTexperiment in materials, run npm install and open index.html.
 
 ## Contact us
-Please do not hesitate to contact us if there are any remaining questions.<br>
+Please do not hesitate to contact us via email if there are any remaining questions.<br>
 ldrescher@uos.de
 hgauditz@uos.de
 lmenzner@uos.de
