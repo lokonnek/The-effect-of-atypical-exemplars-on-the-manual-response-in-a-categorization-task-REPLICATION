@@ -25,7 +25,7 @@ In this mousetracking study the participants had to select the correct category 
 
 ## Running the experiment
 
-Online Link: LINK EINFÜGEN
+Online Link: [Link to experiment](https://xplab-mt-experiment.netlify.app/)
 
 Offline: Clone the folder SCRIPTexperiment in materials, run npm install and open index.html.
 
