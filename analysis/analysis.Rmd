@@ -1,0 +1,1072 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = F, message = FALSE, warning = FALSE, error = FALSE, fig.width = 5, fig.align = "center")
+```
+
+
+```{r libraries, message = FALSE, warning = FALSE, include = FALSE}
+# package for convenience functions (e.g. ggplot2, dplyr, etc.)
+library(tidyverse)
+# pair-wise distances
+library(pdist)
+# Possibly redundant ggplot stuff
+library(ggpubr)
+# Anova stuff
+library(rstatix)
+# Parallel computing (not mclapply because windows)
+library(parallel)
+library(foreach)
+library(doParallel)
+num_cores <- detectCores()
+# Polyarea for AUC
+library(MESS)
+# bimodality coeff
+library(PerformanceAnalytics)
+
+set.seed(123)
+```
+
+# Preprocessing
+
+## Parsing helper functions
+
+```{r}
+# Scales a vector to range [0, 1] s.t. 0 is the start, 1 is the end
+unit_scale_mt <- function(x) {
+  return((x-x[1])/(x[length(x)]-x[1]))
+}
+```
+
+## Fetch the data & general preprocessing
+```{r}
+filename <- 'data-25.07.csv'
+#filename <- 'data-sample.csv'
+data_raw <- read_csv(filename)
+
+# Remove some of the irrelevant columns
+data <- data_raw %>%
+  filter(
+    submission_id >= 1508 &
+    trial_name == "mousetracking_main"
+  ) %>%
+  select(
+    submission_id,
+    answer,
+    correct_category,
+    left_category,
+    right_category,
+    mt_times,
+    mt_x,
+    mt_y,
+    type,
+    animal
+  )
+
+# Add a direction of the answer and correct column
+data <- data %>%
+  mutate(
+    dir = ifelse(answer == left_category, 'left', 'right'),
+    correct = answer == correct_category
+  )
+
+data <- data %>%
+  left_join(
+    data_raw %>%
+      select(submission_id, response) %>%
+      filter(!is.na(response)) %>%
+      rename(handed = response)
+  )
+
+# We need the id to key the time- and space-normalised tibbles
+data <- tibble::rowid_to_column(data, "id")
+
+# Store the moustracking data
+mt_data <- tibble(
+  id = data$id,
+  times = data$mt_times,
+  x = data$mt_x,
+  y = data$mt_y
+) %>%
+  separate_rows(times, x, y, sep = ",", convert = TRUE)
+# y is flipped
+mt_data$y = -mt_data$y
+# flip x if in left direction
+mt_data <- mt_data %>%
+  left_join(data %>% select(id, dir)) %>%
+  mutate(x = ifelse(dir == "left", -x, x))
+
+# Remove the now-defunct mt_* variables from data
+data <- data %>% select(-mt_times, -mt_x, -mt_y)
+```
+
+```{r}
+data %>%
+  group_by(submission_id) %>%
+  summarise(handed = first(handed)) %>%
+  group_by(handed) %>%
+  summarise(n = n())
+```
+
+## Exclusion of outliers
+
+```{r}
+
+mt_data <- mt_data %>%
+  mutate(outlier = FALSE)
+
+repeat {
+  times_rt <- mt_data %>%
+    filter(!outlier) %>%
+    group_by(id) %>%
+    summarise(times = max(times))
+  m <- median(times_rt$times)
+  sigma <- sd(times_rt$times)
+  z <- abs(times_rt$times - m) / sigma
+  
+  z_argmax <- which.max(z)
+  if (z[z_argmax] > 3.5) {
+    outlier_id <- times_rt$id[z_argmax]
+    mt_data <- mt_data %>%
+      mutate(outlier = outlier | id == outlier_id)
+  } else {
+    break
+  }
+}
+
+mt_data %>% filter(outlier) %>% pull(id) %>% unique %>% length
+```
+
+```{r}
+mt_data %>%
+  group_by(id, outlier) %>%
+  summarise(times = max(times)) %>%
+  ggplot(aes(x = times, y = 1)) +
+  geom_point(aes(shape = outlier, color = outlier), position = position_jitter())
+```
+
+Remove outliers
+
+```{r}
+outliers <- mt_data %>%
+  filter(outlier) %>%
+  pull(id) %>%
+  unique
+
+mt_data <- mt_data %>%
+  filter(!outlier) %>%
+  select(-outlier)
+
+for (i in 1:length(outliers)) {
+  outlier <- outliers[i]
+  data <- data %>%
+    filter(id != outlier)
+}
+```
+
+```{r}
+outliers
+data %>% filter(!correct)
+```
+
+Remove incorrect responses
+
+```{r}
+# We need the correct percentage of each participant
+correct_data <- data %>%
+  group_by(submission_id, type) %>%
+  summarise(
+    p = sum(correct) / length(correct),
+    handed = first(handed)
+  )
+# Remove incorrect results from mt_data
+incorrect <- data %>% filter(!correct) %>% pull(id)
+for (i in 1:length(incorrect)) {
+  incorrect_id = incorrect[i]
+  
+  mt_data <- mt_data %>% filter(id != incorrect_id)
+}
+# Remove incorrect results from data
+data <- data %>% filter(correct)
+```
+
+## Time-normalised
+
+We normalised the data into 101 bins. This is stored in its own tibble, keyed to the rest of the data.
+
+```{r}
+time_normalised = tribble(~id, ~step, ~x, ~y)
+
+for (i in 1:nrow(data)) {
+  item <- data[i,]
+  mt_item <- mt_data %>% filter(id == item$id) %>%
+    filter(x != 0 & y != 0)
+  if (nrow(mt_item) < 2) {
+    next
+  }
+  
+  x <- approx(mt_item$times, mt_item$x, n=101)$y
+  y <- approx(mt_item$times, mt_item$y, n=101)$y
+  
+  item <- tibble(
+    id = i, step = 1:101, x = x, y = y,
+    dir = item$dir, type = item$type,
+    submission_id = item$submission_id
+  )
+
+  time_normalised <- bind_rows(time_normalised, item)
+}
+```
+
+## Space-normalised
+
+```{r}
+space_normalised = tribble(~id, ~step, ~x, ~y)
+
+for (i in 1:nrow(data)) {
+  item <- data[i,]
+  mt_item <- mt_data %>% filter(id == item$id) %>%
+    filter(x != 0 & y != 0)
+  if (nrow(mt_item) < 2) {
+    next
+  }
+  mt_item <- mt_item %>% mutate(
+    times = times - min(times)
+  )
+
+  bin_range <- c(0, 500, 1000, 1500)
+  bins <- tibble(
+    bin_cut = cut(mt_item$times, bin_range, include.lowest=TRUE),
+    x = unit_scale_mt(mt_item$x),
+    y = unit_scale_mt(mt_item$y)
+  )
+  
+  bins <- bins %>%
+    group_by(bin_cut) %>%
+    summarise(
+      x = mean(x),
+      y = mean(y),
+      .groups = 'drop'
+    )
+  
+  # If a person finished before the last (or second-last) bin, their position
+  # is (1,1) at that point in time. We adjust as such, so that our statistical
+  # tests work.
+  if (nrow(bins) == 1) {
+    bins <- add_row(bins, bin_cut = '[500,1e+03]', x = 1, y = 1, .groups = 'drop')
+  }
+  if (nrow(bins) == 2) {
+    bins <- add_row(bins, bin_cut = '[1e+03,1.5e+03]', x = 1, y = 1, .groups = 'drop')
+  }
+  # We drop anything beyond our 1.5 second bin.
+  if (nrow(bins) > 3) {
+    bins <- bins %>% filter(!is.na(bin_cut))
+  }
+  
+  bins <- bins %>%
+    mutate(
+      id = i,
+      step = 1:3,
+      dir = item$dir,
+      type = item$type,
+      submission_id = item$submission_id
+    )
+  
+  space_normalised <- bind_rows(space_normalised, bins)
+}
+```
+
+## Other
+
+```{r}
+other_data <- tribble(
+  ~id,
+  ~distance_travelled,
+  ~auc
+)
+
+# We can calculate these
+data <- mt_data %>%
+  group_by(id) %>%
+  summarise(
+    first_move = min(which(x != 0 | y != 0)),
+    movement_init = times[first_move],
+    movement_duration = max(times) - movement_init,
+    total_rt = movement_init + movement_duration,
+    # We take the first non-zero mouse position and calculate the angle from the origin. It's from the vertical so we reverse the usual atan2 input.
+    angle = atan2(x[first_move],
+                  y[first_move]) * 180/pi
+  ) %>%
+  select(-first_move) %>%
+  left_join(data)
+
+# The other metrics are a bit more specific, so we do them by hand
+for (i in 1:nrow(data)) {
+  mt_item <- mt_data %>% filter(id == data[[i, 1]])
+  
+  # We approximate the distance by each discrete mouse-movement step recorded.
+  dist <- 0
+  # We use the naive approach..
+  for (j in 2:nrow(mt_item)) {
+    dist <- dist + sqrt(
+      (mt_item$x[j-1] - mt_item$x[j])^2 +
+      (mt_item$y[j-1] - mt_item$y[j])^2
+    )
+  }
+  
+  # We need to find the straight line
+  x <- mt_item$x
+  y <- mt_item$y
+  m <- (last(y) - first(y)) / (last(x) - first(x))
+  b <- first(y) - m*first(x)
+  f <- function(x) b + m * x
+  # Subtract the line from y
+  y <- y - f(x)
+  # Approximate the area under the curve
+  AUC <- auc(x, y, type = "linear", absolutearea = F)
+
+  data_item <- tibble(
+    id = data[[i, 1]],
+    distance_travelled = dist,
+    AUC = AUC
+  )
+  
+  other_data <- rbind(other_data, data_item)
+}
+
+data <- data %>% left_join(other_data)
+```
+
+
+# Analysis
+
+## Initial graphs
+
+### Mean time-normalised trajectories
+
+```{r}
+ggtime_norm_lr <- time_normalised %>%
+  group_by(step, dir, type) %>%
+  summarise(
+    x = mean(ifelse(dir == 'right', x, -x)),
+    y = mean(y)
+  ) %>%
+  ggplot(aes(x, y, group = interaction(type, dir))) +
+  geom_path(aes(linetype=type)) +
+  theme(plot.title = element_text(size = 11)) +
+  ggtitle("Time-norm trajcetories")
+ggtime_norm_lr
+```
+
+```{r}
+ggtime_norm_pooled <- time_normalised %>%
+  group_by(step, type) %>%
+  summarise(
+    x = mean(x),
+    y = mean(y)
+  ) %>%
+  ggplot(aes(x, y, group = type)) +
+  geom_path(aes(linetype=type)) +
+  theme(plot.title = element_text(size = 11)) +
+  ggtitle("Pooled time-norm")
+ggtime_norm_pooled
+```
+
+```{r}
+ggspace_norm_lr <- space_normalised %>%
+  filter(step <= 3) %>%
+  group_by(step, dir, type) %>%
+  summarise(
+    x = mean(ifelse(dir=='right', x, -x)),
+    y = mean(y)
+  ) %>%
+  ggplot(aes(x, y, group=interaction(type, dir))) +
+  geom_path(aes(linetype=type)) +
+  geom_point() +
+  ylim(0, 1) + 
+  xlim(-1, 1) +
+  theme(plot.title = element_text(size = 11)) +
+  ggtitle("Space-norm trajectories")
+ggspace_norm_lr
+```
+
+```{r}
+ggspace_norm_pooled <- space_normalised %>%
+  filter(step <= 3) %>%
+  group_by(step, type) %>%
+  summarise(
+    x = mean(x),
+    y = mean(y)
+  ) %>%
+  ggplot(aes(x, y, group=type)) +
+  geom_path(aes(linetype=type)) +
+  geom_point() +
+  ylim(0, 1) + 
+  xlim(0, 1) +
+  theme(plot.title = element_text(size = 11)) +
+  ggtitle("Pooled space-norm")
+ggspace_norm_pooled
+```
+
+```{r}
+ggarrange(ggtime_norm_lr, ggspace_norm_lr, ggtime_norm_pooled, ggspace_norm_pooled,
+          #labels = c("Time-normalised trajectories", "Space-normalised trajectories", "Pooled time-normalised trajectories", "Pooled space-normalised trajectories"),
+          common.legend = T)
+  ggsave("norm_space_plots.png")
+```
+
+## Correct proportion t-test
+
+```{r}
+correct_data %>%
+  group_by(type) %>%
+  summarise(
+    mean = mean(p),
+    sd = sd(p)
+  )
+
+correct_t_data <- correct_data %>% select(-handed) %>% spread(type, p)
+t.test(correct_t_data$atypical, correct_t_data$typical)
+```
+
+## Time-normalised analysis
+
+### t-test
+
+```{r}
+pvalues <- c()
+for (i in 1:101) {
+  step_data <- time_normalised %>%
+    filter(step == i) %>%
+    select(id, type, x)
+  step_atypical <- step_data %>%
+    filter(type == 'atypical') %>%
+    pull(x)
+  step_typical <- step_data %>%
+    filter(type == 'typical') %>%
+    pull(x)
+ 
+  t_result = t.test(step_typical, step_atypical)
+  if (is.nan(t_result$p.value)) {
+    # Same datasets (usually at start with everything 0)
+    pvalues <- append(pvalues, 1)
+  } else {
+    pvalues <- append(pvalues, t_result$p.value)
+  }
+}
+
+tibble(step = 1:101, divergence = pvalues < 0.05)
+
+rle(pvalues < 0.05)$lengths[rle(pvalues < 0.05)$values]
+```
+
+53 consequitive, ps < 0.05
+
+```{r}
+time_normalised %>%
+  group_by(step, type) %>%
+  summarise(
+    x = mean(x),
+    y = mean(y)
+  ) %>%
+  add_column(divergent = rep(pvalues < 0.05, each=2)) %>%
+  ggplot(aes(x, y, group = type)) +
+  geom_path(aes(linetype=type)) +
+#  geom_point(aes(color = divergent), size = 0.5) +
+  geom_line(aes(group = step, color = divergent))
+```
+
+### ANOVA
+
+
+```{r}
+step_bins <- c(1, 33, 67, 101)
+time_norm_anova_data <- time_normalised %>%
+  select(submission_id, step, x, type) %>%
+  mutate(bin = cut(step, step_bins, include.lowest=TRUE)) %>%
+  select(submission_id, type, bin, x) %>%
+  mutate(
+    submission_id = as.factor(submission_id),
+    type = as.factor(type)
+  ) %>%
+  group_by(submission_id, bin, type) %>%
+  summarise(x = mean(x)) %>%
+  # For some reason it's not dropping the grouping during summarise
+  ungroup
+  
+time_norm_anova_result <- time_norm_anova_data %>%  
+  anova_test(
+    dv = x, wid = submission_id,
+    within = c(bin, type)
+  )
+
+get_anova_table(time_norm_anova_result)
+
+```
+
+```{r}
+time_norm_anova_data %>%
+  group_by(bin) %>%
+  pairwise_t_test(
+    x ~ type, paired = TRUE,
+    p.adjust.method = "bonferroni"
+  )
+```
+
+Significant difference in the first bin (p < 0.05) and the second and third binds (ps < 0.001)
+
+## Space-normalised data
+
+### ANOVA
+
+```{r}
+space_norm_anova_data <- space_normalised %>%
+  select(submission_id, step, type, x) %>%
+  group_by(submission_id, step, type) %>%
+  summarise(x = mean(x)) %>%
+  ungroup
+
+space_norm_anova_data %>%
+  anova_test(
+    dv = x, wid = submission_id,
+    within = c(step, type)
+  ) %>%
+  get_anova_table
+```
+
+
+```{r}
+space_norm_anova_data %>%
+  group_by(step) %>%
+  pairwise_t_test(
+    x ~ type, paired = TRUE,
+    p.adjust.method = "bonferroni"
+  )
+```
+
+## Other
+
+### t-tests
+
+#### Movement duration
+
+```{r}
+data %>%
+  group_by(type) %>%
+  summarise(
+    movement_duration = mean(movement_duration)
+  )
+
+data %>%
+  t_test(movement_duration ~ type)
+```
+
+#### Total categorization time
+
+```{r}
+data %>%
+  group_by(type) %>%
+  summarise(
+    total_rt = mean(total_rt)
+  )
+data %>%
+  t_test(total_rt ~ type)
+```
+
+#### Total distance travelled
+
+```{r}
+data %>%
+  group_by(type) %>%
+  summarise(
+    distance_travelled = mean(distance_travelled)
+  )
+
+data %>%
+  t_test(distance_travelled ~ type)
+```
+
+#### Movement initiation latency
+
+```{r}
+data %>%
+  group_by(type) %>%
+  summarise(
+    movement_init = mean(movement_init)
+  )
+
+data %>%
+  t_test(movement_init ~ type)
+```
+
+#### Initial direction of the mouse trajectory
+
+```{r}
+data %>%
+  group_by(type) %>%
+  summarise(
+    angle = mean(angle)
+  )
+
+# TODO
+```
+
+### ANOVA
+
+```{r}
+other_anova_data <- data %>%
+  group_by(submission_id, type) %>%
+  summarise(
+    movement_duration = mean(movement_duration),
+    total_rt = mean(total_rt),
+    distance_travelled = mean(distance_travelled),
+    movement_init = mean(movement_init),
+    angle = mean(angle)
+  ) %>%
+  ungroup
+```
+
+#### Movement duration
+
+```{r}
+other_anova_data %>%
+  select(submission_id, type, movement_duration) %>%
+  anova_test(
+    dv = movement_duration,
+    wid = submission_id,
+    within = type
+  ) %>%
+  get_anova_table
+```
+
+#### Total categorization time
+
+```{r}
+other_anova_data %>%
+  select(submission_id, type, total_rt) %>%
+  anova_test(
+    dv = total_rt,
+    wid = submission_id,
+    within = type
+  ) %>%
+  get_anova_table
+```
+
+#### Total distance travelled
+
+```{r}
+other_anova_data %>%
+  select(submission_id, type, distance_travelled) %>%
+  anova_test(
+    dv = distance_travelled,
+    wid = submission_id,
+    within = type
+  ) %>%
+  get_anova_table
+```
+
+#### Movement initiation latency
+
+```{r}
+other_anova_data %>%
+  select(submission_id, type, movement_init) %>%
+  anova_test(
+    dv = movement_init,
+    wid = submission_id,
+    within = type
+  ) %>%
+  get_anova_table
+```
+
+#### Initial direction of the mouse trajectory
+
+```{r}
+other_anova_data %>%
+  select(submission_id, type, angle) %>%
+  anova_test(
+    dv = angle,
+    wid = submission_id,
+    within = type
+  ) %>%
+  get_anova_table
+```
+
+
+## Bimodality
+
+```{r}
+data %>%
+  group_by(type) %>%
+  summarise(AUC = mean(AUC))
+
+data %>%
+  ggplot(aes(x = AUC, group = type, color = type, fill = type)) +
+  geom_density(alpha = 0.3)
+```
+
+```{r}
+AUC_z <- abs(data$AUC - mean(data$AUC)) / sd(data$AUC)
+tidy_AUC <- data %>%
+  select(type, AUC) %>%
+  mutate(AUC_z = (AUC - mean(AUC)) / sd(AUC))
+```
+
+```{r}
+tidy_AUC %>%
+  ggplot(
+    aes(
+      AUC_z,
+      y=c(..count..[..group..==1]/sum(..count..[..group..==1]),
+          ..count..[..group..==2]/sum(..count..[..group..==2])),
+      color = type,
+      fill = type
+    )
+  ) +
+  geom_histogram(alpha = 0.3, position = "identity") +
+  ylab("p")
+```
+
+```{r}
+AUC_z_typical = tidy_AUC %>% filter(type == "typical") %>% pull(AUC_z)
+AUC_z_aypical = tidy_AUC %>% filter(type == "atypical") %>% pull(AUC_z)
+
+# DF:
+length(AUC_z) - 2
+
+ks.test(AUC_z_typical, AUC_z_aypical)
+```
+
+D(823) = 0.150, p < 0.01
+
+```{r}
+AUC_z <- tidy_AUC %>% pull(AUC_z)
+
+bimodality_coefficient <- function(x) {
+  skewness <- skewness(x, method = "sample")
+  kurtosis <- kurtosis(x, method = "sample")
+  (skewness^2 + 1) / kurtosis
+}
+
+bimodality_coefficient(AUC_z_aypical)
+bimodality_coefficient(AUC_z_typical)
+```
+
+
+# Exploratory
+
+We want to see if there is a significant difference in correctness and RT for people who are left- or right-handed.
+
+```{r}
+correct_lefthanded <- correct_data %>% filter(handed == "left") %>% pull(p)
+correct_righthanded <- correct_data %>% filter(handed == "right") %>% pull(p)
+
+t.test(correct_lefthanded, correct_righthanded)
+
+rt_lefthanded <- data %>% filter(handed == "left") %>% pull(total_rt)
+rt_righthanded <- data %>% filter(handed == "right") %>% pull(total_rt)
+
+t.test(rt_lefthanded, rt_righthanded)
+
+movement_duration_lefthanded <- data %>% filter(handed == "left") %>% pull(movement_duration)
+movement_duration_righthanded <- data %>% filter(handed == "right") %>% pull(movement_duration)
+
+t.test(movement_duration_righthanded, movement_duration_lefthanded)
+
+auc_lefthanded <- data %>% filter(handed == "left") %>% pull(AUC)
+auc_righthanded <- data %>% filter(handed == "right") %>% pull(AUC)
+
+t.test(auc_lefthanded, auc_righthanded)
+```
+
+
+
+
+# APPENDIX A
+
+## Bootstrapping
+
+Establish the mean and standard deviation of x for each time-step grouped by type.
+
+```{r eval = FALSE}
+sim_data <- time_normalised %>%
+  group_by(step, type) %>%
+  summarise(
+    mean = mean(x),
+    sd = sd(x)
+  ) %>%
+  pivot_wider(
+    names_from = type,
+    values_from = c(mean, sd)
+  )
+```
+
+Perform the simulation
+
+So: We want to run 10,000 simulations, each time with N participants, simulating each 101 time-steps for both atypical and typical. We do not distinguish between participants, so we want to run Ne4 simulations, and then average into 1e4 buckets of size N.
+
+We can sample 101 times the Ne4 for simplicity, then binning into 1e4 bins with means of each N simulated subjects.
+
+```{r eval = FALSE}
+N <- length(unique(data$submission_id))
+num_sims <- 10000
+
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Combining tibbles wastes too much computational time
+list_combine <- function(x, ...) {
+  lapply(seq_along(x),
+         function(i) c(x[[i]], lapply(list(...), function(y) y[[i]])))
+}
+
+mean_bin <- function(x, bin_size) {
+  sapply(split(x, ceiling(seq_along(x)/bin_size)), mean)
+}
+
+system.time({
+simulation = foreach(
+  i = seq_along(sim_data$step),
+  .combine = 'list_combine',
+  .multicombine = TRUE,
+  .init = list(list(), list())
+) %dopar% {
+  typical <- rnorm(N*num_sims, sim_data$mean_typical[i], sim_data$sd_typical[i])
+  atypical <- rnorm(N*num_sims, sim_data$mean_atypical[i], sim_data$sd_atypical[i])
+#  list(mean_bin(typical, N), mean_bin(atypical, N))
+  list(typical, atypical)
+}
+})
+
+stopCluster(cl)
+```
+Tidy up the simulation results. We assign the step because order should be preserved at this point, and arbitrarily assign the simulation number (the order is probably preserved within the steps, but they are independent normal samples so we do not care; they uniquely assign sim-step combinations so we are happy).
+
+```{r eval = FALSE}
+system.time({
+tidy_sim <- as_tibble(simulation, .name_repair = "universal") %>%
+  rename(typical = ...1, atypical = ...2) %>%
+  mutate(step = 1:101) %>%
+  pivot_longer(-step, names_to = "type", values_to = "x") %>%
+  unnest(x) %>%
+  mutate(
+    sim = rep(1:num_sims, N*101*2),
+    subject = rep(1:N, 101*2, each=num_sims)
+  ) %>%
+  print
+
+# Binned means
+#tidy_sim <- as_tibble(simulation, .name_repair = "universal") %>%
+#  rename(typical = ...1, atypical = ...2) %>%
+#  mutate(step = 1:101) %>%
+#  pivot_longer(-step, names_to = "type", values_to = "x") %>%
+#  unnest(x) %>%
+#  mutate(sim = rep(1:num_sims, 101*2))
+})
+```
+
+Detect divergences
+
+We want the tidy simulation data as a row-wise simulation matrix with a row-indexed type vector.
+
+```{r eval = FALSE}
+system.time({
+ttest_sim <- tidy_sim %>%
+  pivot_wider(
+    names_from = c(subject, type),
+    values_from = x
+  ) %>%
+  select(-sim) %>%
+  nest(data = -step)
+type_groups <- append(rep(1, N), rep(2, N))
+})
+```
+
+```{r eval = FALSE}
+# Based on http://adv-r.had.co.nz/Profiling.html#t-test
+rowwise_ttest <- function(X, type) {
+  t_stat <- function(X) {
+    m <- rowMeans(X)
+    n <- ncol(X)
+    var <- rowSums((X - m) ^ 2 / (n - 1))
+    
+    list(m = m, n = n, var = var)
+  }
+  
+  t1 <- t_stat(X[, type == 1])
+  t2 <- t_stat(X[, type == 2])
+  
+  (t1$m - t2$m) / sqrt(t1$var / t1$n + t2$var / t2$n)
+}
+
+rowwise_divergence_detection <- function(X, type, significance = 0.05) {
+  t <- rowwise_ttest(X, type)
+  2*pt(-abs(t), df = ncol(X) - 2) < significance
+}
+
+res <- c()
+system.time({
+  for (i in 1:101) {
+    res <- append(res, rowwise_divergence_detection(ttest_sim[[2]][[i]], type_groups))
+  }
+})
+tmp <- res %>%
+  as_tibble() %>%
+  mutate(
+    sim = rep(1:num_sims, 101),
+    step = rep(1:101, each = num_sims)
+  )
+
+tmp
+
+tmp %>%
+#  filter(sim == 1) %>%
+  group_by(sim) %>%
+  summarise(
+#    div = unique(diff(unique(cumsum(value == 1))[value != 1]))
+    div = list(unique(rle(value)$lengths[rle(value)$values]))
+  ) %>%
+  unnest(div) %>%
+  filter(div > 2) %>%
+  group_by(div) %>%
+  summarise(
+    n = n(),
+    p = n / num_sims,
+    `%` = p*100
+  ) %>%
+  select(-n)
+```
+
+```{r eval = FALSE}
+detect_divergence_seq <- function(sim_data) {
+  sim_data %>%
+    group_by(step) %>%
+    t_test(x ~ type, var.equal = TRUE) %>%
+    add_significance %>%
+    pull(p.signif)# %>%
+#    {diff(unique(cumsum(grepl('\\*', .))[. == "ns"]))} %>%
+#    unique
+}
+
+
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+system.time({
+simulation = foreach(
+  i = seq_along(tidy_sim$sim),
+  .packages='tidyverse'
+) %dopar% {
+  tidy_sim %>%
+    filter(sim == i) %>%
+    detect_divergence_seq
+}
+})
+
+
+stopCluster(cl)
+```
+
+```{r eval = FALSE}
+detect_divergence_seq <- function(sim_data) {
+sim_data %>%
+  group_by(step) %>%
+  t_test(x ~ type) %>%
+  add_significance %>%
+  pull(p.signif) %>%
+  {diff(unique(cumsum(grepl('\\*', .))[. == "ns"]))} %>%
+  unique
+}
+
+
+num_sims <- length(unique(tidy_sim$sim))
+divergence_sequences <- c()
+for (i in 1:num_sims) {
+sim <- tidy_sim %>% filter(sim == i)
+divergences <- detect_divergence_seq(sim)
+divergence_sequences <- append(divergence_sequences, divergences)
+}
+```
+
+Stats on it
+
+```{r eval = FALSE}
+tibble(div = divergence_sequences) %>%
+group_by(div) %>%
+summarise(n = n()) %>%
+mutate(`%` = 100 * n / num_sims)
+```
+
+
+
+
+
+```{r eval = FALSE}
+simulation %>%
+  filter(sim == 1) %>%
+  group_by(step) %>%
+  t_test(x ~ type) %>%
+  add_significance %>%
+  pull(p.signif) %>%
+  {diff(unique(cumsum(grepl('\\*', .))))}
+
+test <- c(0,0,0,1,1,1,0,0,0,0,1,1,0,0,0)
+test <- c("x", "*", "x", "*", "**", "x")
+diff(unique(cumsum(grepl("\\*", test))[test == "x"]))
+     
+diff(unique(cumsum(test == 1)[test != 1]))
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
