@@ -10,7 +10,7 @@ Our group consists of Luisa Drescher, Hannah Gauditz, Lilian Menzner und Lilith 
 
 Here you will find an short introduction for your orientation in our repository. <br>
 In the folder analysis we provide you with the script for our statistical analysis.<br>
-In the folder materials we provide you with the script for our experiment, the used stimuli and the images and graphs used in our final report.<br>
+In the folder materials we provide you with the script for our experimentand the used stimuli.<br>
 In the folder data we provide the raw data we accumulated through our pilot study and our final study. <br>
 In the folder manuscript we provide our final report, our preregistration report and our experimental design.<br>
 We hope you find everything to your convenience.
